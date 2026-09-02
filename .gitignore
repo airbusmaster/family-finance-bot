@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+finance.db
+finance.db-*
+env
+backup/
+.DS_Store
