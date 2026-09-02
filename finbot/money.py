@@ -3,9 +3,11 @@
 
 import re
 
-# «450», «1 200», «1200,50», «1.5к», «10к», «2 млн», «1,2 млн»
+# «450», «1 200», «210.000», «1.200.000», «1,5к», «10к», «2 млн», «2.5 млн»
+# Точка и запятая внутри числа — разделители тысяч (копейки не вводим).
+# Дробная часть допускается только перед множителем: «1,5к», «2.5 млн».
 _AMOUNT_RE = re.compile(
-    r"(?<![\w.,])(\d[\d ]*(?:[.,]\d{1,2})?)\s*(к|k|тыс\.?|т\.?р\.?|млн\.?|m)?(?![\w])",
+    r"(?<![\w.,])(\d[\d ]*(?:[.,]\d+)*)\s*(к|k|тыс\.?|т\.?р\.?|млн\.?|m)?(?![\w])",
     re.IGNORECASE,
 )
 
@@ -28,13 +30,13 @@ def parse_amount(text: str):
     num, suffix = m.group(1), (m.group(2) or "")
     num = num.replace(" ", "").replace(",", ".")
     mult = _MULT.get(suffix.lower().replace(" ", ""), 1)
-    if "." in num:
+    if mult > 1 and num.count(".") == 1:
+        # «1.5к», «2,5 млн» — дробь перед множителем
         whole, frac = num.split(".", 1)
-        frac = (frac + "00")[:2]
-        kop = int(whole or 0) * 100 + int(frac)
+        kop = round((int(whole or 0) + int(frac) / 10 ** len(frac)) * 100 * mult)
     else:
-        kop = int(num) * 100
-    kop *= mult
+        # «210.000», «1.200.000», «1200,50» — разделители тысяч, рубли целиком
+        kop = int(num.replace(".", "")) * 100 * mult
     if kop <= 0:
         return None, text
     rest = (text[: m.start()] + " " + text[m.end():]).strip()
