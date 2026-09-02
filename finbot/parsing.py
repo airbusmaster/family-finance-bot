@@ -8,6 +8,8 @@ from .dates import MONTH_RU, MONTH_RU_GEN, now_msk
 from .money import parse_amount
 
 INCOME_WORDS = ("доход", "зарплата", "аванс", "премия", "пришло", "прибыль", "поступление")
+# «зарплата сотрудникам» — это расход, а не наш доход
+STAFF_WORDS = ("сотрудник", "персонал", "работник")
 DEBT_ADD_WORDS = ("долг", "займ", "кредит")
 DEBT_PAY_WORDS = ("погасил", "погасила", "вернул", "вернула", "погашение", "оплатил долг", "оплатила долг")
 DEBT_SET_WORDS = ("остаток", "сверка")
@@ -116,7 +118,10 @@ def is_income(text: str) -> bool:
     t = text.strip()
     if t.startswith("+"):
         return True
-    first = t.split()[0].lower() if t.split() else ""
+    low = t.lower()
+    if any(w in low for w in STAFF_WORDS):
+        return False
+    first = low.split()[0] if low.split() else ""
     return any(first.startswith(w) for w in INCOME_WORDS)
 
 
