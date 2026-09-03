@@ -173,6 +173,87 @@ check("карточка -> запись", db.card_tx(100, 555), tid)
 check("чужая карточка", db.card_tx(100, 556), None)
 check("последняя запись Саши", db.last_tx_of(1)["id"] != tid, True)
 
+# ---------- зеркальные карточки и личный баланс ----------
+print()
+print("Зеркальные карточки и личный баланс:")
+from finbot import cards, handlers, telegram
+
+SENT, EDITED = [], []
+_counter = [1000]
+
+
+def fake_send(chat_id, text, markup=None):
+    _counter[0] += 1
+    SENT.append((chat_id, text, markup))
+    return {"message_id": _counter[0]}
+
+
+def fake_edit(chat_id, message_id, text, markup=None):
+    EDITED.append((chat_id, message_id, text, markup))
+    return {}
+
+
+handlers.send, handlers.edit = fake_send, fake_edit
+handlers.api = lambda *a, **k: None
+handlers.cur_month = lambda: M
+
+# users 1 и 2 существуют. Саша (1) вносит трату.
+handlers.handle_message({"chat": {"id": 1}, "from": {"id": 1, "first_name": "Саша"}, "text": "320 шаурма"})
+check("карточка автору и партнёру", [c for c, _, _ in SENT], [1, 2])
+check("партнёр видит, кто внёс", "внёс" in SENT[1][1], True)
+new_id = db.card_tx(1, 1001)
+check("карточка автора привязана", new_id is not None, True)
+check("зеркальная карточка привязана к той же записи", db.card_tx(2, 1002), new_id)
+check("cards_of_tx: две карточки", len(db.cards_of_tx(new_id)), 2)
+
+# Саша правит сумму reply-ем — карточка партнёра перерисовывается
+SENT.clear(); EDITED.clear()
+handlers.handle_message({"chat": {"id": 1}, "from": {"id": 1, "first_name": "Саша"},
+                         "text": "350", "reply_to_message": {"message_id": 1001}})
+check("правка: своя карточка перерисована", (1, 1001) in [(c, m) for c, m, _, _ in EDITED], True)
+check("правка: карточка партнёра перерисована", (2, 1002) in [(c, m) for c, m, _, _ in EDITED], True)
+check("партнёру не шлём текстовое уведомление", SENT, [])
+check("в карточке партнёра новая сумма", "350 ₽" in [t for c, m, t, _ in EDITED if c == 2][0], True)
+
+# Аня (2) правит по зеркальной карточке — у Саши тоже обновится
+SENT.clear(); EDITED.clear()
+handlers.handle_message({"chat": {"id": 2}, "from": {"id": 2, "first_name": "Аня"},
+                         "text": "шаурма и кола", "reply_to_message": {"message_id": 1002}})
+check("правка партнёром: обе карточки", sorted((c, m) for c, m, _, _ in EDITED), [(1, 1001), (2, 1002)])
+check("описание обновилось", db.get_tx(new_id)["description"], "шаурма и кола")
+
+# смена категории кнопкой у автора -> зеркало у партнёра
+EDITED.clear()
+handlers.handle_callback({"id": "x", "data": f"cat:{new_id}:products", "from": {"id": 1},
+                          "message": {"chat": {"id": 1}, "message_id": 1001}})
+check("категория: карточка партнёра перерисована", (2, 1002) in [(c, m) for c, m, _, _ in EDITED], True)
+check("категория: в зеркале видна", "Продукты" in [t for c, m, t, _ in EDITED if c == 2][0], True)
+
+# удаление у партнёра -> у автора карточка помечена удалённой
+EDITED.clear()
+handlers.handle_callback({"id": "x", "data": f"del:{new_id}", "from": {"id": 2},
+                          "message": {"chat": {"id": 2}, "message_id": 1002}})
+check("удаление: карточка автора перерисована", (1, 1001) in [(c, m) for c, m, _, _ in EDITED], True)
+check("удаление: помечено", "Удалено" in [t for c, m, t, _ in EDITED if c == 1][0], True)
+check("удаление: запись помечена deleted", db.get_tx(new_id)["deleted"], 1)
+
+# личный баланс
+SENT.clear()
+handlers.handle_message({"chat": {"id": 2}, "from": {"id": 2, "first_name": "Аня"}, "text": "💰 Баланс"})
+check("баланс — свой по умолчанию", "Аня" in SENT[0][1].splitlines()[0], True)
+check("баланс — без разбивки по людям", "По людям" in SENT[0][1], False)
+check("баланс — есть переключатель «Вся семья»",
+      SENT[0][2]["inline_keyboard"][0][0]["callback_data"], f"bal:all:{M}")
+fam = cards.balance_text(M)
+check("семейный баланс — с разбивкой", "По людям" in fam, True)
+SENT.clear()
+handlers.handle_message({"chat": {"id": 1}, "from": {"id": 1, "first_name": "Саша"}, "text": "📋 Выписка"})
+check("выписка — своя по умолчанию", "Саша" in SENT[0][1].splitlines()[0], True)
+EDITED.clear()
+handlers.handle_callback({"id": "x", "data": f"bal:{M}", "from": {"id": 1},
+                          "message": {"chat": {"id": 1}, "message_id": 5}})
+check("старая кнопка bal:месяц не ломается", "вся семья" in EDITED[0][2], True)
+
 print()
 if FAILED:
     print("ПРОВАЛЕНО:")

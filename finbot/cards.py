@@ -43,14 +43,20 @@ def cat_keyboard(tx_id: int):
     return {"inline_keyboard": rows}
 
 
-def balance_text(month: str) -> str:
-    inc, exp = db.month_totals(month)
-    lines = [f"💰 <b>{month_title(month)}</b>", ""]
+def balance_text(month: str, user_id=None) -> str:
+    """Баланс месяца: user_id — личный, None — вся семья с разбивкой по людям."""
+    inc, exp = db.month_totals(month, user_id)
+    if user_id:
+        u = db.get_user(user_id)
+        who = u["name"] if u else "?"
+    else:
+        who = "вся семья"
+    lines = [f"💰 <b>{month_title(month)} · {who}</b>", ""]
     lines.append(f"Доходы:  <b>{fmt(inc)}</b>")
     lines.append(f"Расходы: <b>{fmt(exp)}</b>")
     lines.append(f"Остаток: <b>{fmt(inc - exp, sign=True)}</b>")
     us = db.users()
-    if len(us) > 1:
+    if user_id is None and len(us) > 1:
         lines.append("")
         lines.append("По людям:")
         for u in us:
@@ -64,11 +70,28 @@ def balance_text(month: str) -> str:
     return "\n".join(lines)
 
 
-def balance_markup(month: str):
-    return {"inline_keyboard": [[
-        {"text": "◀️ " + month_title(shift_month(month, -1)), "callback_data": f"bal:{shift_month(month, -1)}"},
-        {"text": month_title(shift_month(month, 1)) + " ▶️", "callback_data": f"bal:{shift_month(month, 1)}"},
-    ]]}
+def _scope_row(prefix: str, month: str, user_id):
+    """Ряд переключателей «Вся семья / Имя / Имя»; текущий выбор помечен точками."""
+    row = [{"text": ("· Вся семья ·" if not user_id else "Вся семья"),
+            "callback_data": f"{prefix}:all:{month}"}]
+    for u in db.users():
+        mark = "· " + u["name"] + " ·" if user_id == u["tg_id"] else u["name"]
+        row.append({"text": mark, "callback_data": f"{prefix}:{u['tg_id']}:{month}"})
+    return row
+
+
+def _nav_row(prefix: str, month: str, user_id):
+    scope = str(user_id) if user_id else "all"
+    return [
+        {"text": "◀️ " + month_title(shift_month(month, -1)),
+         "callback_data": f"{prefix}:{scope}:{shift_month(month, -1)}"},
+        {"text": month_title(shift_month(month, 1)) + " ▶️",
+         "callback_data": f"{prefix}:{scope}:{shift_month(month, 1)}"},
+    ]
+
+
+def balance_markup(month: str, user_id=None):
+    return {"inline_keyboard": [_scope_row("bal", month, user_id), _nav_row("bal", month, user_id)]}
 
 
 def statement_text(month: str, user_id=None) -> str:
@@ -106,17 +129,7 @@ def statement_text(month: str, user_id=None) -> str:
 
 
 def statement_markup(month: str, user_id=None):
-    scope = str(user_id) if user_id else "all"
-    row_who = [{"text": ("· Вся семья ·" if not user_id else "Вся семья"),
-                "callback_data": f"st:all:{month}"}]
-    for u in db.users():
-        mark = "· " + u["name"] + " ·" if user_id == u["tg_id"] else u["name"]
-        row_who.append({"text": mark, "callback_data": f"st:{u['tg_id']}:{month}"})
-    row_nav = [
-        {"text": "◀️ " + month_title(shift_month(month, -1)), "callback_data": f"st:{scope}:{shift_month(month, -1)}"},
-        {"text": month_title(shift_month(month, 1)) + " ▶️", "callback_data": f"st:{scope}:{shift_month(month, 1)}"},
-    ]
-    return {"inline_keyboard": [row_who, row_nav]}
+    return {"inline_keyboard": [_scope_row("st", month, user_id), _nav_row("st", month, user_id)]}
 
 
 def debts_text() -> str:

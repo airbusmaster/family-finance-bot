@@ -241,6 +241,14 @@ def card_tx(chat_id, message_id):
     return r["tx_id"] if r else None
 
 
+def cards_of_tx(tx_id):
+    """Все карточки операции во всех чатах (у автора и у партнёра) — для перерисовки."""
+    return conn().execute(
+        "SELECT chat_id, message_id FROM card_msgs WHERE tx_id=? ORDER BY rowid",
+        (tx_id,),
+    ).fetchall()
+
+
 # ---------- category rules ----------
 
 def learned_category(description: str):

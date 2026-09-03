@@ -33,8 +33,10 @@ HELP = (
     "<b>Сверка с банком</b> — по кредитам часть платежа уходит в проценты, "
     "поэтому раз в месяц сверяй остаток:\n"
     "  <code>остаток Банк 1280000</code>\n\n"
-    "<b>Кнопки внизу</b>: Баланс — итог месяца, Выписка — траты по категориям "
-    "(вся семья или по одному), Долги — остатки по обязательствам.\n\n"
+    "<b>Кнопки внизу</b>: Баланс — твой итог месяца, Выписка — твои траты по категориям; "
+    "в обоих кнопки «Вся семья» и имя партнёра. Долги — остатки по обязательствам.\n\n"
+    "Траты партнёра приходят тебе такой же карточкой — она обновляется при правках, "
+    "и по ней тоже можно ответить (reply), чтобы поправить.\n\n"
     "Своё имя в отчётах: <code>/имя Саша</code>"
 )
 
@@ -50,6 +52,48 @@ def notify_partner(author_id, text):
     for u in db.users():
         if u["tg_id"] != author_id:
             send(u["tg_id"], text)
+
+
+def send_card(tx, chat_id, note=""):
+    """Отправить карточку операции в чат и запомнить связь сообщение -> запись."""
+    card, markup = tx_card(tx)
+    r = send(chat_id, card + (f"\n\n{note}" if note else ""), markup=markup)
+    if r:
+        db.remember_card(chat_id, r["message_id"], tx["id"])
+    return r
+
+
+def post_card(tx, author_id):
+    """Новая запись: карточка автору и такая же (зеркальная) партнёру.
+    Партнёр видит живую карточку, а не текст, и она перерисуется при правках."""
+    send_card(tx, author_id)
+    author = db.get_user(author_id)
+    for u in db.users():
+        if u["tg_id"] != author_id:
+            send_card(tx, u["tg_id"], note=f"👤 внёс {author['name'] if author else '?'}")
+
+
+def refresh_cards(tx_id, note="", skip=None):
+    """Перерисовать ВСЕ карточки записи во всех чатах (у автора и у партнёра),
+    чтобы второй человек видел текущее состояние, а не первую версию.
+    skip — (chat_id, message_id), которую уже перерисовали отдельно."""
+    tx = db.get_tx(tx_id)
+    if tx is None:
+        return
+    if tx["deleted"]:
+        text = (f"🗑 Удалено: {fmt(tx['amount_kop'])}"
+                + (f" — {tx['description']}" if tx["description"] else ""))
+        for c in db.cards_of_tx(tx_id):
+            if skip and (c["chat_id"], c["message_id"]) == skip:
+                continue
+            edit(c["chat_id"], c["message_id"], text + (f"\n{note}" if note else ""),
+                 markup={"inline_keyboard": []})
+        return
+    card, markup = tx_card(tx)
+    for c in db.cards_of_tx(tx_id):
+        if skip and (c["chat_id"], c["message_id"]) == skip:
+            continue
+        edit(c["chat_id"], c["message_id"], card + (f"\n\n{note}" if note else ""), markup=markup)
 
 
 def apply_edit(chat_id, editor_id, tx, text, card_message_id=None):
@@ -69,16 +113,18 @@ def apply_edit(chat_id, editor_id, tx, text, card_message_id=None):
         send(chat_id, "Так и было — ничего не поменял.")
         return
     new_tx = db.get_tx(tx["id"])
-    card, markup = tx_card(new_tx)
-    note = "✏️ " + describe_changes(tx, changed)
-    if card_message_id:
-        edit(chat_id, card_message_id, card + "\n\n" + note, markup=markup)
-    else:
-        r = send(chat_id, card + "\n\n" + note, markup=markup)
-        if r:
-            db.remember_card(chat_id, r["message_id"], tx["id"])
     u = db.get_user(editor_id)
-    notify_partner(editor_id, f"✏️ {u['name']} исправил запись: {describe_changes(tx, changed)}")
+    note = "✏️ " + describe_changes(tx, changed)
+    skip = None
+    if card_message_id:
+        card, markup = tx_card(new_tx)
+        edit(chat_id, card_message_id, card + "\n\n" + note, markup=markup)
+        skip = (chat_id, card_message_id)
+    else:
+        r = send_card(new_tx, chat_id, note=note)
+        if r:
+            skip = (chat_id, r["message_id"])
+    refresh_cards(tx["id"], note=f"{note} · {u['name'] if u else '?'}", skip=skip)
 
 
 def do_debt_payment(chat_id, uid, debt_id, kop):
@@ -174,12 +220,12 @@ def handle_message(msg):
         send(chat_id, f"Готово, теперь ты в отчётах — <b>{name}</b>.")
         return
     if low in ("💰 баланс", "/баланс", "баланс", "/balance"):
-        m = cur_month()
-        send(chat_id, balance_text(m), markup=balance_markup(m))
+        m = cur_month()  # каждому — свой баланс, семья и партнёр — кнопками
+        send(chat_id, balance_text(m, uid), markup=balance_markup(m, uid))
         return
     if low in ("📋 выписка", "/выписка", "выписка"):
         m = cur_month()
-        send(chat_id, statement_text(m), markup=statement_markup(m))
+        send(chat_id, statement_text(m, uid), markup=statement_markup(m, uid))
         return
     if low in ("💳 долги", "/долги", "долги"):
         send(chat_id, debts_text(), markup=debts_markup())
@@ -256,24 +302,13 @@ def handle_message(msg):
     if is_income(text):
         desc = strip_income_words(rest).strip("+ ").strip()
         tx_id = db.add_tx(uid, "income", kop, "other", desc, cur_month())
-        tx = db.get_tx(tx_id)
-        card, markup = tx_card(tx)
-        r = send(chat_id, card, markup=markup)
-        if r:
-            db.remember_card(chat_id, r["message_id"], tx_id)
-        notify_partner(uid, f"💵 {u['name']}: доход {fmt(kop)}" + (f" — {desc}" if desc else ""))
+        post_card(db.get_tx(tx_id), uid)
         return
 
     desc = rest.strip()
     cat = categorize(desc) if desc else "other"
     tx_id = db.add_tx(uid, "expense", kop, cat, desc, cur_month())
-    tx = db.get_tx(tx_id)
-    card, markup = tx_card(tx)
-    r = send(chat_id, card, markup=markup)
-    if r:
-        db.remember_card(chat_id, r["message_id"], tx_id)
-    notify_partner(uid, f"➖ {u['name']}: {fmt(kop)}" + (f" — {desc}" if desc else "")
-                   + f" · {CAT_TITLE[cat]}")
+    post_card(db.get_tx(tx_id), uid)
 
 
 def handle_callback(cb):
@@ -287,8 +322,13 @@ def handle_callback(cb):
         return
 
     if data.startswith("bal:"):
-        m = data[4:]
-        edit(chat_id, message_id, balance_text(m), markup=balance_markup(m))
+        parts = data.split(":")
+        if len(parts) == 2:          # старые кнопки «bal:2026-09» — семейный вид
+            scope, m = "all", parts[1]
+        else:
+            _, scope, m = parts
+        user_id = None if scope == "all" else int(scope)
+        edit(chat_id, message_id, balance_text(m, user_id), markup=balance_markup(m, user_id))
         return
 
     if data.startswith("st:"):
@@ -309,12 +349,16 @@ def handle_callback(cb):
         if tx is None or tx["deleted"]:
             edit(chat_id, message_id, "Запись уже удалена.")
             return
+        old_cat = tx["category"]
         db.set_tx_category(tx_id, cat)
         if tx["description"]:
             db.learn_rule(tx["description"], cat)
         tx = db.get_tx(tx_id)
         card, markup = tx_card(tx)
         edit(chat_id, message_id, card + "\n\n✏️ Запомнил — дальше буду ставить сам.", markup=markup)
+        who = db.get_user(uid)
+        refresh_cards(tx_id, note=f"✏️ категория {CAT_TITLE.get(old_cat, '—')} → {CAT_TITLE.get(cat, '—')}"
+                      f" · {who['name'] if who else '?'}", skip=(chat_id, message_id))
         return
 
     if data.startswith("del:"):
@@ -324,6 +368,8 @@ def handle_callback(cb):
             db.delete_tx(tx_id)
             edit(chat_id, message_id, f"🗑 Удалено: {fmt(tx['amount_kop'])}"
                  + (f" — {tx['description']}" if tx["description"] else ""))
+            who = db.get_user(uid)
+            refresh_cards(tx_id, note=f"👤 удалил {who['name'] if who else '?'}", skip=(chat_id, message_id))
         return
 
     if data.startswith("done:"):
@@ -335,7 +381,7 @@ def handle_callback(cb):
         card, _ = tx_card(tx)
         edit(chat_id, message_id, card + "\n✅ Внесено")  # без markup — кнопки убираются
         m = tx["month"]
-        send(chat_id, balance_text(m), markup=balance_markup(m))
+        send(chat_id, balance_text(m, uid), markup=balance_markup(m, uid))
         return
 
     if data.startswith("pay:"):
