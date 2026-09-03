@@ -240,15 +240,14 @@ check("удаление: запись помечена deleted", db.get_tx(new_i
 # личный баланс
 SENT.clear()
 handlers.handle_message({"chat": {"id": 2}, "from": {"id": 2, "first_name": "Аня"}, "text": "💰 Баланс"})
-check("баланс — свой по умолчанию", "Аня" in SENT[0][1].splitlines()[0], True)
-check("баланс — без разбивки по людям", "По людям" in SENT[0][1], False)
-check("баланс — есть переключатель «Вся семья»",
-      SENT[0][2]["inline_keyboard"][0][0]["callback_data"], f"bal:all:{M}")
-fam = cards.balance_text(M)
-check("семейный баланс — с разбивкой", "По людям" in fam, True)
+check("баланс — семейный по умолчанию", "вся семья" in SENT[0][1].splitlines()[0], True)
+check("баланс — с разбивкой по людям", "По людям" in SENT[0][1], True)
+check("баланс — есть переключатель на человека",
+      SENT[0][2]["inline_keyboard"][0][1]["callback_data"], f"bal:1:{M}")
+check("личный баланс — без разбивки", "По людям" in cards.balance_text(M, 2), False)
 SENT.clear()
 handlers.handle_message({"chat": {"id": 1}, "from": {"id": 1, "first_name": "Саша"}, "text": "📋 Выписка"})
-check("выписка — своя по умолчанию", "Саша" in SENT[0][1].splitlines()[0], True)
+check("выписка — семейная по умолчанию", "вся семья" in SENT[0][1].splitlines()[0], True)
 EDITED.clear()
 handlers.handle_callback({"id": "x", "data": f"bal:{M}", "from": {"id": 1},
                           "message": {"chat": {"id": 1}, "message_id": 5}})

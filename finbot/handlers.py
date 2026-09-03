@@ -33,8 +33,8 @@ HELP = (
     "<b>Сверка с банком</b> — по кредитам часть платежа уходит в проценты, "
     "поэтому раз в месяц сверяй остаток:\n"
     "  <code>остаток Банк 1280000</code>\n\n"
-    "<b>Кнопки внизу</b>: Баланс — твой итог месяца, Выписка — твои траты по категориям; "
-    "в обоих кнопки «Вся семья» и имя партнёра. Долги — остатки по обязательствам.\n\n"
+    "<b>Кнопки внизу</b>: Баланс — итог месяца, Выписка — траты по категориям "
+    "(вся семья или по одному), Долги — остатки по обязательствам.\n\n"
     "Траты партнёра приходят тебе такой же карточкой — она обновляется при правках, "
     "и по ней тоже можно ответить (reply), чтобы поправить.\n\n"
     "Своё имя в отчётах: <code>/имя Саша</code>"
@@ -220,12 +220,12 @@ def handle_message(msg):
         send(chat_id, f"Готово, теперь ты в отчётах — <b>{name}</b>.")
         return
     if low in ("💰 баланс", "/баланс", "баланс", "/balance"):
-        m = cur_month()  # каждому — свой баланс, семья и партнёр — кнопками
-        send(chat_id, balance_text(m, uid), markup=balance_markup(m, uid))
+        m = cur_month()
+        send(chat_id, balance_text(m), markup=balance_markup(m))
         return
     if low in ("📋 выписка", "/выписка", "выписка"):
         m = cur_month()
-        send(chat_id, statement_text(m, uid), markup=statement_markup(m, uid))
+        send(chat_id, statement_text(m), markup=statement_markup(m))
         return
     if low in ("💳 долги", "/долги", "долги"):
         send(chat_id, debts_text(), markup=debts_markup())
@@ -381,7 +381,7 @@ def handle_callback(cb):
         card, _ = tx_card(tx)
         edit(chat_id, message_id, card + "\n✅ Внесено")  # без markup — кнопки убираются
         m = tx["month"]
-        send(chat_id, balance_text(m, uid), markup=balance_markup(m, uid))
+        send(chat_id, balance_text(m), markup=balance_markup(m))
         return
 
     if data.startswith("pay:"):
