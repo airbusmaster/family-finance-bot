@@ -55,6 +55,13 @@ check("пятёрочка", builtin_category("пятёрочка"), "products")
 check("аптека", builtin_category("аптека ригла"), "health")
 check("шаурма", builtin_category("шаурма"), "cafe")
 check("неизвестное", builtin_category("абракадабра"), "other")
+check("фитнес", builtin_category("фитнес абонемент"), "sport")
+check("тренировка", builtin_category("тренировка с тренером"), "sport")
+check("спортмастер это одежда", builtin_category("спортмастер"), "clothes")
+check("залил бензин не спорт", builtin_category("залил бензин"), "auto")
+check("ипотека", builtin_category("ипотека за сентябрь"), "credits")
+check("платёж по кредиту", builtin_category("платёж по кредиту"), "credits")
+check("рассрочка", builtin_category("рассрочка за телефон"), "credits")
 
 # ---------- доход/долг ----------
 print("Разбор команд:")
