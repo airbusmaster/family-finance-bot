@@ -4,11 +4,20 @@
 
 from . import db
 from .categories import CATEGORIES, CAT_TITLE
-from .dates import month_title, shift_month
+from .dates import MONTH_RU, month_title, shift_month
 from .money import fmt
 
 
+def month_line(month: str) -> str:
+    """Итог месяца одной строкой для подвала карточки: «За сентябрь: расходы … · остаток …»."""
+    inc, exp = db.month_totals(month)
+    mon = MONTH_RU[int(month[5:7]) - 1]
+    return f"📊 За {mon}: расходы {fmt(exp)} · остаток {fmt(inc - exp, sign=True)}"
+
+
 def tx_card(tx):
+    """Карточка операции. Внизу — семейный итог месяца на момент отрисовки,
+    поэтому отдельная кнопка «Внести» для просмотра баланса больше не нужна."""
     u = db.get_user(tx["user_id"])
     name = u["name"] if u else "?"
     if tx["kind"] == "income":
@@ -17,7 +26,6 @@ def tx_card(tx):
                 + f"\n{name} · {month_title(tx['month'])}")
         markup = {"inline_keyboard": [[
             {"text": "🗑 Удалить", "callback_data": f"del:{tx['id']}"},
-            {"text": "✅ Внести", "callback_data": f"done:{tx['id']}"},
         ]]}
     else:
         text = (f"➖ {fmt(tx['amount_kop'])}"
@@ -26,8 +34,8 @@ def tx_card(tx):
         markup = {"inline_keyboard": [[
             {"text": "✏️ Категория", "callback_data": f"pick:{tx['id']}"},
             {"text": "🗑 Удалить", "callback_data": f"del:{tx['id']}"},
-            {"text": "✅ Внести", "callback_data": f"done:{tx['id']}"},
         ]]}
+    text += "\n" + month_line(tx["month"])
     return text, markup
 
 

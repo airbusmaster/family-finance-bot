@@ -159,6 +159,12 @@ def delete_tx(tx_id):
     conn().commit()
 
 
+def restore_tx(tx_id):
+    """Вернуть удалённую запись (удаление — это флаг, данные на месте)."""
+    conn().execute("UPDATE tx SET deleted=0 WHERE id=?", (tx_id,))
+    conn().commit()
+
+
 def month_totals(month, user_id=None):
     """(income_kop, expense_kop) за месяц; user_id=None — по всем."""
     q = ("SELECT kind, COALESCE(SUM(amount_kop),0) s FROM tx "

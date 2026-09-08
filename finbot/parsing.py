@@ -13,6 +13,42 @@ STAFF_WORDS = ("сотрудник", "персонал", "работник")
 DEBT_ADD_WORDS = ("долг", "займ", "кредит")
 DEBT_PAY_WORDS = ("погасил", "погасила", "вернул", "вернула", "погашение", "оплатил долг", "оплатила долг")
 DEBT_SET_WORDS = ("остаток", "сверка")
+# reply на карточку этими словами — удалить запись / вернуть удалённую
+DELETE_WORDS = ("удали", "удалить", "удалите", "удаляй", "удалено", "удаление", "delete", "del", "🗑")
+RESTORE_WORDS = ("верни", "вернуть", "верните", "восстанови", "восстановить", "restore", "undo", "↩️")
+
+# Мусор по краям описания: «- еда», «• такси», «продукты.» — люди копируют из списков
+_JUNK_EDGE = re.compile(r"^[\s\-–—•·.,:;+]+|[\s\-–—•·.,:;]+$")
+# Валюта внутри описания, если вдруг осталась: «₽ продажа вещей»
+_CURRENCY = re.compile(r"(?<![\w])(₽|руб(?:лей|ля)?\.?|р\.)(?![\w])", re.IGNORECASE)
+
+
+def clean_desc(text: str) -> str:
+    """Описание без ведущих дефисов/маркеров, знаков рубля и лишних пробелов."""
+    t = _CURRENCY.sub(" ", text)
+    t = _JUNK_EDGE.sub("", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _split_commas(line: str):
+    """«49 самокат, 215 кофе» -> две операции, но только если в КАЖДОЙ части есть сумма.
+    «продукты, алкоголь 1240» остаётся одной записью. «1,5к» не рвётся: нужна запятая с пробелом."""
+    pieces = [p.strip() for p in re.split(r";|,\s+", line) if p.strip()]
+    if len(pieces) > 1 and all(parse_amount(p)[0] is not None for p in pieces):
+        return pieces
+    return [line]
+
+
+def split_entries(text: str):
+    """Несколько операций в одном сообщении: каждая строка — отдельная запись,
+    внутри строки допускается «а, б» через запятую (см. _split_commas)."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines:
+        return []
+    out = []
+    for line in lines:
+        out.extend(_split_commas(line))
+    return out
 
 
 def parse_debt_add(text: str):
@@ -106,7 +142,7 @@ def parse_edit(text: str, users_list):
     fields = {}
     if kop is not None:
         fields["amount_kop"] = kop
-    desc = rest.strip("+ ").strip() if kop is not None else t
+    desc = clean_desc(rest if kop is not None else t)
     if desc:
         fields["description"] = desc
     if not fields:

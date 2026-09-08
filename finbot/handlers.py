@@ -8,8 +8,9 @@ from .cards import (balance_markup, balance_text, cat_keyboard, debts_markup,
 from .categories import CAT_TITLE, builtin_category
 from .dates import cur_month
 from .money import fmt, parse_amount
-from .parsing import (is_income, parse_debt_add, parse_debt_pay, parse_debt_set,
-                      parse_edit, strip_income_words)
+from .parsing import (DELETE_WORDS, RESTORE_WORDS, clean_desc, is_income,
+                      parse_debt_add, parse_debt_pay, parse_debt_set, parse_edit,
+                      split_entries, strip_income_words)
 from .telegram import api, edit, send
 
 HELP = (
@@ -17,10 +18,13 @@ HELP = (
     "<b>Трата</b> — просто напиши сумму и на что:\n"
     "  <code>450 такси</code> или <code>такси 450</code>\n"
     "  <code>1,5к продукты</code>, <code>шаурма 320</code>\n"
-    "Категория подставится сама, её можно поправить кнопкой — я запомню.\n\n"
+    "Категория подставится сама, её можно поправить кнопкой — я запомню.\n"
+    "Несколько трат сразу — каждую с новой строки или через запятую:\n"
+    "  <code>49 самокат, 215 кофе</code>\n\n"
     "<b>Исправить запись</b> — ответь (reply) на её карточку:\n"
     "  <code>540</code> — новая сумма, <code>такси в аэропорт</code> — описание,\n"
-    "  <code>это Аня</code> — чья трата, <code>август</code> — в какой месяц.\n"
+    "  <code>это Аня</code> — чья трата, <code>август</code> — в какой месяц,\n"
+    "  <code>удали</code> — удалить, <code>верни</code> — вернуть удалённую.\n"
     "Или <code>исправь 540</code> — поправит твою последнюю запись.\n\n"
     "<b>Доход</b> — с плюсом или словом:\n"
     "  <code>+150000 зарплата</code>\n"
@@ -81,8 +85,7 @@ def refresh_cards(tx_id, note="", skip=None):
     if tx is None:
         return
     if tx["deleted"]:
-        text = (f"🗑 Удалено: {fmt(tx['amount_kop'])}"
-                + (f" — {tx['description']}" if tx["description"] else ""))
+        text = deleted_text(tx)
         for c in db.cards_of_tx(tx_id):
             if skip and (c["chat_id"], c["message_id"]) == skip:
                 continue
@@ -125,6 +128,31 @@ def apply_edit(chat_id, editor_id, tx, text, card_message_id=None):
         if r:
             skip = (chat_id, r["message_id"])
     refresh_cards(tx["id"], note=f"{note} · {u['name'] if u else '?'}", skip=skip)
+
+
+def deleted_text(tx) -> str:
+    return (f"🗑 Удалено: {fmt(tx['amount_kop'])}"
+            + (f" — {tx['description']}" if tx["description"] else ""))
+
+
+def do_delete(chat_id, uid, tx, message_id=None):
+    """Пометить запись удалённой и перерисовать все её карточки.
+    message_id — карточка, с которой удаляли (ей ставим короткий текст без подписи)."""
+    db.delete_tx(tx["id"])
+    who = db.get_user(uid)
+    skip = None
+    if message_id:
+        edit(chat_id, message_id, deleted_text(tx) + "\n↩️ Вернуть: ответь на карточку «верни»",
+             markup={"inline_keyboard": []})
+        skip = (chat_id, message_id)
+    refresh_cards(tx["id"], note=f"👤 удалил {who['name'] if who else '?'}", skip=skip)
+
+
+def do_restore(uid, tx):
+    """Вернуть удалённую запись: все карточки снова становятся живыми."""
+    db.restore_tx(tx["id"])
+    who = db.get_user(uid)
+    refresh_cards(tx["id"], note=f"↩️ вернул {who['name'] if who else '?'}")
 
 
 def do_debt_payment(chat_id, uid, debt_id, kop):
@@ -181,8 +209,21 @@ def handle_message(msg):
         tx_id = db.card_tx(chat_id, reply.get("message_id"))
         if tx_id:
             tx = db.get_tx(tx_id)
-            if tx is None or tx["deleted"]:
+            word = text.lower().strip(" .!")
+            if tx is None:
                 send(chat_id, "Эта запись уже удалена.")
+                return
+            if tx["deleted"]:
+                if word in RESTORE_WORDS:
+                    do_restore(uid, tx)
+                else:
+                    send(chat_id, "Эта запись удалена. Вернуть её: ответь на карточку <code>верни</code>.")
+                return
+            if word in DELETE_WORDS:
+                do_delete(chat_id, uid, tx, message_id=reply.get("message_id"))
+                return
+            if word in RESTORE_WORDS:
+                send(chat_id, "Запись и так на месте.")
                 return
             apply_edit(chat_id, uid, tx, text, card_message_id=reply.get("message_id"))
             return
@@ -231,14 +272,33 @@ def handle_message(msg):
         send(chat_id, debts_text(), markup=debts_markup())
         return
 
+    # --- операции: одна или несколько (построчно / через запятую) ---
+    parts = split_entries(text)
+    if len(parts) <= 1:
+        err = handle_entry(chat_id, u, text)
+        if err:
+            send(chat_id, err)
+        return
+    bad = []
+    for part in parts:
+        if handle_entry(chat_id, u, part):
+            bad.append(part)
+    if bad:
+        send(chat_id, "Не разобрал строки (нет суммы?):\n"
+             + "\n".join(f"• {b}" for b in bad))
+
+
+def handle_entry(chat_id, u, text):
+    """Одна операция: долг, погашение, сверка, доход или трата.
+    Возвращает текст ошибки (нечего записать) или None, если записано."""
+    uid = u["tg_id"]
+
     # --- долг: добавление ---
     r = parse_debt_add(text)
     if r == "noamount":
-        send(chat_id, "Не вижу суммы долга. Пример: <code>долг Иван 50000 за ремонт</code>")
-        return
+        return "Не вижу суммы долга. Пример: <code>долг Иван 50000 за ремонт</code>"
     if r == "notitle":
-        send(chat_id, "Кому долг? Пример: <code>долг Иван 50000 за ремонт</code>")
-        return
+        return "Кому долг? Пример: <code>долг Иван 50000 за ремонт</code>"
     if r:
         title, kop, note = r
         db.add_debt(title, kop, note)
@@ -247,13 +307,12 @@ def handle_message(msg):
                       + "\nПогашение: <code>погасил "
                       + title + " 10000</code> или кнопкой в «Долгах».")
         notify_partner(uid, f"💳 {u['name']} добавил долг: {title} — {fmt(kop)}")
-        return
+        return None
 
     # --- долг: погашение текстом ---
     r = parse_debt_pay(text)
     if r == "noamount":
-        send(chat_id, "Не вижу суммы. Пример: <code>погасил Иван 10000</code>")
-        return
+        return "Не вижу суммы. Пример: <code>погасил Иван 10000</code>"
     if r:
         query, kop = r
         d = db.find_debt(query) if query else None
@@ -264,22 +323,21 @@ def handle_message(msg):
             else:
                 send(chat_id, "Не понял, какой долг гасим. Открой «💳 Долги» и нажми «Погасить».",
                      markup=debts_markup())
-                return
+                return None
         do_debt_payment(chat_id, uid, d["id"], kop)
-        return
+        return None
 
     # --- долг: сверка остатка с банком ---
     r = parse_debt_set(text)
     if r == "noamount":
-        send(chat_id, "Не вижу суммы. Пример: <code>остаток Банк 1280000</code>")
-        return
+        return "Не вижу суммы. Пример: <code>остаток Банк 1280000</code>"
     if r:
         query, kop = r
         d = db.find_debt(query) if query else None
         if d is None:
             send(chat_id, "Не понял, по какому долгу сверка. Пример: <code>остаток Банк 1280000</code>",
                  markup=debts_markup())
-            return
+            return None
         old_rem = d["principal_kop"] - d["paid_kop"]
         db.set_debt_remaining(d["id"], kop)
         if kop <= 0:
@@ -290,25 +348,25 @@ def handle_message(msg):
             send(chat_id, f"🔄 Сверка «{d['title']}»: остаток теперь <b>{fmt(kop)}</b>\n"
                           f"(было {fmt(old_rem)}, {arrow} {fmt(abs(diff))})")
         notify_partner(uid, f"🔄 {u['name']} сверил «{d['title']}» с банком: остаток {fmt(max(kop, 0))}")
-        return
+        return None
 
     # --- доход / трата ---
     kop, rest = parse_amount(text)
     if kop is None:
-        send(chat_id, "Не вижу суммы 🤔 Напиши, например: <code>450 такси</code>\n"
-                      "Или нажми «❓ Помощь».")
-        return
+        return ("Не вижу суммы 🤔 Напиши, например: <code>450 такси</code>\n"
+                "Или нажми «❓ Помощь».")
 
     if is_income(text):
-        desc = strip_income_words(rest).strip("+ ").strip()
+        desc = clean_desc(strip_income_words(clean_desc(rest)))
         tx_id = db.add_tx(uid, "income", kop, "other", desc, cur_month())
         post_card(db.get_tx(tx_id), uid)
-        return
+        return None
 
-    desc = rest.strip()
+    desc = clean_desc(rest)
     cat = categorize(desc) if desc else "other"
     tx_id = db.add_tx(uid, "expense", kop, cat, desc, cur_month())
     post_card(db.get_tx(tx_id), uid)
+    return None
 
 
 def handle_callback(cb):
@@ -364,12 +422,8 @@ def handle_callback(cb):
     if data.startswith("del:"):
         tx_id = int(data[4:])
         tx = db.get_tx(tx_id)
-        if tx:
-            db.delete_tx(tx_id)
-            edit(chat_id, message_id, f"🗑 Удалено: {fmt(tx['amount_kop'])}"
-                 + (f" — {tx['description']}" if tx["description"] else ""))
-            who = db.get_user(uid)
-            refresh_cards(tx_id, note=f"👤 удалил {who['name'] if who else '?'}", skip=(chat_id, message_id))
+        if tx and not tx["deleted"]:
+            do_delete(chat_id, uid, tx, message_id=message_id)
         return
 
     if data.startswith("done:"):
@@ -378,8 +432,8 @@ def handle_callback(cb):
         if tx is None or tx["deleted"]:
             edit(chat_id, message_id, "Запись уже удалена.")
             return
-        card, _ = tx_card(tx)
-        edit(chat_id, message_id, card + "\n✅ Внесено")  # без markup — кнопки убираются
+        card, markup = tx_card(tx)  # старые карточки с кнопкой «Внести»: перерисовать по-новому
+        edit(chat_id, message_id, card, markup=markup)
         m = tx["month"]
         send(chat_id, balance_text(m), markup=balance_markup(m))
         return
