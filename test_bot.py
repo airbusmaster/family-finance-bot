@@ -7,7 +7,7 @@ import tempfile
 os.environ["FIN_DB"] = os.path.join(tempfile.mkdtemp(), "test.db")
 
 from finbot import db
-from finbot.categories import builtin_category
+from finbot.categories import CATEGORIES, KEYWORDS, builtin_category
 from finbot.money import fmt, parse_amount
 from finbot.parsing import (clean_desc, parse_debt_add, parse_debt_pay, parse_debt_set,
                             is_income, parse_edit, parse_month_word, split_entries)
@@ -82,6 +82,20 @@ check("залил бензин не спорт", builtin_category("залил б
 check("ипотека", builtin_category("ипотека за сентябрь"), "credits")
 check("платёж по кредиту", builtin_category("платёж по кредиту"), "credits")
 check("рассрочка", builtin_category("рассрочка за телефон"), "credits")
+check("билеты это путешествия", builtin_category("билеты в турцию"), "travel")
+check("отель", builtin_category("отель в сочи"), "travel")
+check("тур", builtin_category("тур в египет"), "travel")
+check("поезд", builtin_category("поезд в питер"), "travel")
+check("виза", builtin_category("виза"), "travel")
+check("турник это спорт", builtin_category("турник"), "sport")
+check("метро остаётся транспортом", builtin_category("метро"), "transport")
+check("хозтовары это быт", builtin_category("хозтовары"), "household")
+check("бытовая химия", builtin_category("бытовая химия"), "household")
+check("уборка", builtin_category("уборка квартиры"), "household")
+check("порошок", builtin_category("порошок для стирки"), "household")
+check("жкх остаётся домом", builtin_category("жкх за август"), "home")
+check("аренда остаётся домом", builtin_category("аренда квартиры"), "home")
+check("все категории в словаре", sorted(set(KEYWORDS) - {k for k, _ in CATEGORIES}), [])
 
 # ---------- доход/долг ----------
 print("Разбор команд:")
